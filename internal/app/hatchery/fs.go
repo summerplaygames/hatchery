@@ -10,11 +10,30 @@ import (
 	"github.com/summerplaygames/hatchery/internal/app/docker"
 )
 
+// Environment keys
+const (
+	SCName        = "SMART_CONTRACT_NAME"
+	AuthKey       = "AUTH_KEY"
+	AuthID        = "AUTH_KEY_ID"
+	DragonChainID = "DRAGONCHAIN_ID"
+)
+
+// Credentials are the credentials used to access the DragonChain
+// API for a particular chain.
+type Credentials struct {
+	AuthKey       string
+	AuthID        string
+	DragonChainID string
+}
+
 // FSLibrary is a Library implementation that uses the filesystem.
 type FSLibrary struct {
 	// BasePath is the base filepath where contract manifests will be stored.
 	BasePath string
-	once     sync.Once
+	// Crednentials are the credentials used to access a DragonChain.
+	Credentials Credentials
+
+	once sync.Once
 }
 
 // Get returns the DockerContract for the given name.
@@ -33,6 +52,13 @@ func (l *FSLibrary) Get(name string) (Contract, error) {
 		return nil, fmt.Errorf("failed to read JSON manifest: %s", err)
 	}
 	return &docker.Contract{
+		Name: manifest.Type,
+		Env: map[string]string{
+			SCName:        manifest.Type,
+			AuthKey:       l.Credentials.AuthKey,
+			AuthID:        l.Credentials.AuthID,
+			DragonChainID: l.Credentials.DragonChainID,
+		},
 		Image:   manifest.Image,
 		Command: manifest.Cmd,
 		Args:    manifest.Args,

@@ -8,6 +8,8 @@ import (
 // Contract is a Contract implementation that executes Smart
 // Contracts running in Docker containers.
 type Contract struct {
+	Name    string
+	Env     map[string]string
 	Image   string
 	Command string
 	Args    []string
@@ -17,7 +19,7 @@ type Contract struct {
 // to `docker run`. The container's stdout is returned along with
 // any errors that occur during execution.
 func (c *Contract) Execute(payload []byte) ([]byte, error) {
-	cmd, err := Run(c.Image, c.Command, c.Args...)
+	cmd, err := Run(c.Image, c.Command, c.Env, c.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute command: %s", err)
 	}
