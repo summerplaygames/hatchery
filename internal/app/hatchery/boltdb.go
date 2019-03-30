@@ -1,40 +1,38 @@
 package hatchery
 
 import (
-	"bytes"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"reflect"
 	"sync"
 
 	"github.com/boltdb/bolt"
 )
 
+// BoltDBHeap is a Heap implementation backed by BoltDB.
 type BoltDBHeap struct {
+	// Path is the file path that the BoltDB file will live.
+	// If a DB doesn't already exist at this path, it will be
+	// created automatically. Otherwise, it will just be used
+	// as-is.
 	Path string
+
 	once sync.Once
 	db   *bolt.DB
 }
 
-func (c *BoltDBHeap) Put(bucket string, key, value interface{}) error {
+// Put stores the kvp in the given BoltDB bucket. If the bucket doesn't
+// already exist, it will be created automatically. If the key already exists
+// in the bucket, it will be overwritten. An error is returned if the bucket
+// could not be created, or the insertaion fails for whatever reason.
+func (c *BoltDBHeap) Put(bucket, key string, value []byte) error {
 	if err := c.initOnce(); err != nil {
 		return err
 	}
-	vb, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("failed to marshal value JSON: %s", err)
-	}
-	kb, err := c.getKeyBytes(key)
-	if err != nil {
-		return fmt.Errorf("failed to marshal key to bytes: %s", err)
-	}
-	err = c.db.Update(func(tx *bolt.Tx) error {
+	err := c.db.Update(func(tx *bolt.Tx) error {
 		buck, e := tx.CreateBucketIfNotExists([]byte(bucket))
 		if e != nil {
 			return e
 		}
-		return buck.Put(kb, vb)
+		return buck.Put([]byte(key), value)
 	})
 	if err != nil {
 		return fmt.Errorf("put failed: %s", err)
@@ -42,42 +40,68 @@ func (c *BoltDBHeap) Put(bucket string, key, value interface{}) error {
 	return nil
 }
 
-func (c *BoltDBHeap) Get(bucket string, key interface{}, typ reflect.Type) (interface{}, error) {
+// Get returns the value for the provided key and bucket. If the bucket doesn't
+// already exist, it will be created automatically. ErrHeapNotExist is returned if
+// No entry in the heap bucket for the requested key. Otherwise, an error is returned
+// only if the bucket could not be created.
+func (c *BoltDBHeap) Get(bucket, key string) ([]byte, error) {
 	if err := c.initOnce(); err != nil {
 		return nil, err
 	}
-	kb, err := c.getKeyBytes(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal key to bytes: %s", err)
-	}
-	var i interface{}
-	err = c.db.View(func(tx *bolt.Tx) error {
+	var b []byte
+	err := c.db.View(func(tx *bolt.Tx) error {
 		buck, e := tx.CreateBucketIfNotExists([]byte(bucket))
 		if e != nil {
 			return e
 		}
-		vb := buck.Get(kb)
-		ptr := reflect.New(typ)
-		i = ptr.Elem().Interface()
-		return json.Unmarshal(vb, i)
+		vb := buck.Get([]byte(key))
+		if vb == nil {
+			return ErrHeapNotExist
+		}
+		b = make([]byte, len(vb))
+		copy(b, vb)
+		return nil
 	})
-	return i, err
+	return b, err
 }
 
+// GetAll returns all heap entries in the given bucket. If the bucket doesn't
+// already exist, it will be created automatically. An error is only returned if
+// the bucket cannot be created.
+func (c *BoltDBHeap) GetAll(bucket string) (map[string][]byte, error) {
+	if err := c.initOnce(); err != nil {
+		return nil, err
+	}
+	heap := make(map[string][]byte)
+	err := c.db.View(func(tx *bolt.Tx) error {
+		buck, e := tx.CreateBucketIfNotExists([]byte(bucket))
+		if e != nil {
+			return e
+		}
+
+		curr := buck.Cursor()
+		for {
+			k, v := curr.Next()
+			if k == nil || v == nil {
+				break
+			}
+			kc := make([]byte, len(k))
+			copy(kc, k)
+			vc := make([]byte, len(v))
+			copy(vc, v)
+			heap[string(kc)] = vc
+		}
+		return nil
+	})
+	return heap, err
+}
+
+// Close closes the BoltDB handle.
 func (c *BoltDBHeap) Close() error {
 	if c.db != nil {
 		return c.db.Close()
 	}
 	return nil
-}
-
-func (c *BoltDBHeap) getKeyBytes(key interface{}) ([]byte, error) {
-	var buf bytes.Buffer
-	err := binary.Write(&buf, binary.BigEndian, key)
-	if err != nil {
-		fmt.Println("binary.Write failed:", err)
-	}
-	return buf.Bytes(), nil
 }
 
 func (c *BoltDBHeap) initOnce() error {
