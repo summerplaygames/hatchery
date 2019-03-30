@@ -32,6 +32,8 @@ import (
 const (
 	// ExecutionOrderParallel signifies parrellel execution of smart contracts.
 	ExecutionOrderParallel = "parallel"
+	// ExecutionOrderSerial signifies serial execution of smart contracts.
+	ExecutionOrderSerial = "serial"
 )
 
 var (
@@ -86,12 +88,14 @@ type ContractManifest struct {
 	Image string
 	// Cmd is the command to execute in the smart contract's docker container.
 	Cmd string
-	// Args are additional application arguments that are passed in to the docker
+	// Args are optional additional application arguments that are passed in to the docker
 	// container after the command.
 	Args []string
 	// ExecutionOrder stipulates how multiple instances of the same smart contract are
-	// executed.
+	// executed. Valid values are ExecutionOrderParallel and ExecutionOrderSerial.
 	ExecutionOrder ExecutionOrder `json:"execution_order"`
+	// Env is an optional set of environment variables to pass into the contract at runtime.
+	Env map[string]string
 	// Auth is an optional DockerHub access key that is used when pulling the container image.
 	// This is used when your container image is private in DockerHub.
 	Auth string

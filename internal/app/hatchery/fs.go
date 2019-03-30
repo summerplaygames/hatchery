@@ -70,14 +70,18 @@ func (l *FSLibrary) Get(name string) (Contract, error) {
 	if err := json.NewDecoder(f).Decode(&manifest); err != nil {
 		return nil, fmt.Errorf("failed to read JSON manifest: %s", err)
 	}
+	env := map[string]string{
+		SCName:        manifest.Type,
+		AuthKey:       l.Credentials.AuthKey,
+		AuthID:        l.Credentials.AuthID,
+		DragonChainID: l.Credentials.DragonChainID,
+	}
+	for k, v := range manifest.Env {
+		env[k] = v
+	}
 	return &docker.Contract{
-		Name: manifest.Type,
-		Env: map[string]string{
-			SCName:        manifest.Type,
-			AuthKey:       l.Credentials.AuthKey,
-			AuthID:        l.Credentials.AuthID,
-			DragonChainID: l.Credentials.DragonChainID,
-		},
+		Name:    manifest.Type,
+		Env:     env,
 		Image:   manifest.Image,
 		Command: manifest.Cmd,
 		Args:    manifest.Args,
