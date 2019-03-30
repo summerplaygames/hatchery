@@ -174,13 +174,14 @@ func (a *Application) SetupRoutes(muxer *mux.Router) {
 	muxer.HandleFunc("/contract", a.PostContract()).Methods(http.MethodPost)
 }
 
-// GetSCHeap returns an HTTP handler function that responds with all entries in
-// the heap for a bucket.
+// GetSCHeap returns an HTTP handler function that responds with the heap data for the requested
+// contract and key.
 func (a *Application) GetSCHeap() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		name := vars["sc_name"]
-		h, err := a.Heap.GetAll(name)
+		key := vars["key"]
+		h, err := a.Heap.Get(name, key)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
