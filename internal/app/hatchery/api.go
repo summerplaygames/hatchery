@@ -25,6 +25,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync"
+
+	"github.com/gorilla/mux"
 
 	"github.com/google/uuid"
 )
@@ -149,17 +152,35 @@ type getSCHeapRequest struct {
 	Type string `json:"txn_type"`
 }
 
+type postTransactionRequest struct {
+	Type    string `json:"txn_type"`
+	Payload json.RawMessage
+}
+
+// Application contains of all of the application state and its dependencies.
+type Application struct {
+	Bucket  string
+	Heap    Heap
+	Ledger  Ledger
+	Lib     Library
+	cronTab map[string]*CronJob
+	once    sync.Once
+}
+
+// SetupRoutes initializes the HTTP routes with the provided muxer.
+func (a *Application) SetupRoutes(muxer *mux.Router) {
+	muxer.HandleFunc("/get/{sc_name}/{key}", a.GetSCHeap()).Methods(http.MethodGet)
+	muxer.HandleFunc("/transaction", a.PostTransaction()).Methods(http.MethodPost)
+	muxer.HandleFunc("/contract", a.PostContract()).Methods(http.MethodPost)
+}
+
 // GetSCHeap returns an HTTP handler function that responds with all entries in
 // the heap for a bucket.
-func GetSCHeap(heap Heap) func(http.ResponseWriter, *http.Request) {
+func (a *Application) GetSCHeap() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req getSCHeapRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			// TODO: return proper response
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		h, err := heap.GetAll(req.Type)
+		vars := mux.Vars(r)
+		name := vars["sc_name"]
+		h, err := a.Heap.GetAll(name)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -168,17 +189,12 @@ func GetSCHeap(heap Heap) func(http.ResponseWriter, *http.Request) {
 	}
 }
 
-type postTransactionRequest struct {
-	Type    string `json:"txn_type"`
-	Payload json.RawMessage
-}
-
 // PostTransaction returns an HTTP handler function that posts a transaction to the ledger. If
 // the transaction is a smart contract, the smart contract will be executed and the output will
 // be stored in the heap. Regardless, the "content" (The output in the case of a smart contract
 // or the payload itself in the case of a regular transaction) is stored in a new transaction on
 // the ledger.
-func PostTransaction(bucket string, ledger Ledger, heap Heap, lib Library) func(http.ResponseWriter, *http.Request) {
+func (a *Application) PostTransaction() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req postTransactionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -186,7 +202,7 @@ func PostTransaction(bucket string, ledger Ledger, heap Heap, lib Library) func(
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		contract, err := lib.Get(req.Type)
+		contract, err := a.Lib.Get(req.Type)
 		if err == ErrContractNotExist {
 			http.NotFound(w, r)
 			return
@@ -205,25 +221,25 @@ func PostTransaction(bucket string, ledger Ledger, heap Heap, lib Library) func(
 			for k, v := range output {
 				var buf bytes.Buffer
 				if err := binary.Write(&buf, binary.BigEndian, v); err == nil {
-					heap.Put(bucket, k, buf.Bytes())
+					a.Heap.Put(a.Bucket, k, buf.Bytes())
 				}
 			}
 		}
 		t := NewTransaction(content)
-		ledger.Append(t)
+		a.Ledger.Append(t)
 		writeJSONResponse(w, t)
 	}
 }
 
 // PostContract returns an HTTP handler function that creates a new Contract in the Library.
-func PostContract(lib Library) func(http.ResponseWriter, *http.Request) {
+func (a *Application) PostContract() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req ContractManifest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if err := lib.Put(&req); err != nil {
+		if err := a.Lib.Put(&req); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
