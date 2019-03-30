@@ -1,55 +1,53 @@
 package hatchery
 
+import "container/list"
+
 type MemLedger struct {
-	head *Transaction
-	tail *Transaction
+	ledger *list.List
+}
+
+func NewMemLedger() *MemLedger {
+	return &MemLedger{
+		ledger: list.New(),
+	}
 }
 
 func (l *MemLedger) Head() *Transaction {
-	return l.head
+	return l.ledger.Front().Value.(*Transaction)
 }
 
 func (l *MemLedger) Find(id string) (*Transaction, bool) {
-	curr := l.head
+	curr := l.ledger.Front()
 	for curr != nil {
-		if curr.ID == id {
-			return curr, true
+		txn := curr.Value.(*Transaction)
+		if txn.ID == id {
+			return txn, true
 		}
-		curr = curr.Next
+		curr = curr.Next()
 	}
 	return nil, false
 }
 
 func (l *MemLedger) Append(t *Transaction) {
-	if l.head == nil {
-		l.head = t
-	}
-	if l.tail != nil {
-		t.Prev, l.tail.Next = l.tail, t
-	}
-	l.tail = t
+	l.ledger.PushBack(t)
 }
 
 func (l *MemLedger) Pop() *Transaction {
-	if l.tail == nil {
+	if l.ledger.Len() == 0 {
 		return nil
 	}
-	tail := l.tail
-	l.tail = tail.Prev
-	tail.Prev = nil
-	return tail
+	return l.ledger.Remove(l.ledger.Back()).(*Transaction)
 }
 
 func (l *MemLedger) Remove(id string) (*Transaction, bool) {
-	curr := l.head
+	curr := l.ledger.Front()
 	for curr != nil {
-		if curr.ID == id {
-			curr.Prev.Next = curr.Next
-			curr.Next.Prev = curr.Prev
-			curr.Next, curr.Prev = nil, nil
-			return curr, true
+		txn := curr.Value.(*Transaction)
+		if txn.ID == id {
+			l.ledger.Remove(curr)
+			return txn, true
 		}
-		curr = curr.Next
+		curr = curr.Next()
 	}
 	return nil, false
 }
