@@ -24,8 +24,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 
@@ -99,6 +102,8 @@ type ContractManifest struct {
 	ExecutionOrder ExecutionOrder `json:"execution_order"`
 	// Env is an optional set of environment variables to pass into the contract at runtime.
 	Env map[string]string
+	// Cron is an optional rate of scheduled execution specified as a cron.
+	Cron string
 	// Auth is an optional DockerHub access key that is used when pulling the container image.
 	// This is used when your container image is private in DockerHub.
 	Auth string
@@ -163,6 +168,7 @@ type Application struct {
 	Heap    Heap
 	Ledger  Ledger
 	Lib     Library
+	cronMu  sync.Mutex
 	cronTab map[string]*CronJob
 	once    sync.Once
 }
@@ -172,6 +178,15 @@ func (a *Application) SetupRoutes(muxer *mux.Router) {
 	muxer.HandleFunc("/get/{sc_name}/{key}", a.GetSCHeap()).Methods(http.MethodGet)
 	muxer.HandleFunc("/transaction", a.PostTransaction()).Methods(http.MethodPost)
 	muxer.HandleFunc("/contract", a.PostContract()).Methods(http.MethodPost)
+}
+
+// Shutdown shuts down the application. All currently running cron jobs will be stopped.
+func (a *Application) Shutdown() {
+	a.cronMu.Lock()
+	defer a.cronMu.Unlock()
+	for _, cron := range a.cronTab {
+		cron.Stop()
+	}
 }
 
 // GetSCHeap returns an HTTP handler function that responds with the heap data for the requested
@@ -233,16 +248,65 @@ func (a *Application) PostTransaction() func(http.ResponseWriter, *http.Request)
 }
 
 // PostContract returns an HTTP handler function that creates a new Contract in the Library.
+// If the request specifies a cron interval, a new cron job is started in the background.
 func (a *Application) PostContract() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req ContractManifest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		err := json.NewDecoder(r.Body).Decode(&req)
+		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
+		}
+		var interval time.Duration
+		if req.Cron != "" {
+			interval, err = time.ParseDuration(req.Cron)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 		}
 		if err := a.Lib.Put(&req); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		if interval > 0 {
+			a.startCronJob(w, req.Type, interval)
+		}
 	}
+}
+
+func (a *Application) startCronJob(w http.ResponseWriter, name string, interval time.Duration) {
+	a.ensureCronTab()
+	contract, err := a.Lib.Get(name)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	cron := NewCronJob(interval, contract)
+	// In order to properly start the cron job, we need to aggressively consume the errros,
+	// aggressively consume the output, and finally, start the cron job itself.
+	go func() {
+		for err := range cron.Errors() {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}()
+	go func() {
+		for result := range cron.Output() {
+			fmt.Println(result)
+		}
+	}()
+	go func() {
+		if err := cron.Run(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}()
+	a.cronMu.Lock()
+	a.cronTab[name] = cron
+	a.cronMu.Unlock()
+}
+
+func (a *Application) ensureCronTab() {
+	a.once.Do(func() {
+		a.cronTab = make(map[string]*CronJob)
+	})
 }
